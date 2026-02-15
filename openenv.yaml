@@ -1,0 +1,103 @@
+name: customer-service-agent-env
+version: "1.0.0"
+description: >
+  An OpenEnv environment where AI agents resolve real customer support tickets.
+  Features LLM-generated infinite ticket variety, realistic tool failures,
+  a dynamic customer anger state machine, and NLP-graded reply quality.
+author: CODEVENGERS
+license: MIT
+
+tasks:
+  - id: easy
+    name: "Ticket classification and reply"
+    difficulty: easy
+    description: >
+      Classify the incoming ticket into the correct category and send
+      a helpful, empathetic reply. Graded on classification accuracy
+      and reply sentiment.
+    optimal_steps: 2
+    max_steps: 5
+
+  - id: medium
+    name: "Order lookup and resolution"
+    difficulty: medium
+    description: >
+      Look up the customer's order, validate refund eligibility, take
+      the correct resolution action (refund or escalate), and send a reply.
+      Graded on tool call ordering and resolution correctness.
+    optimal_steps: 4
+    max_steps: 8
+
+  - id: hard
+    name: "Multi-step resolution with multilingual tickets"
+    difficulty: hard
+    description: >
+      Full resolution pipeline on tickets written in English, Hindi, Spanish,
+      or French. Graded on resolution accuracy, NLP reply sentiment,
+      trajectory efficiency, and customer anger management.
+    optimal_steps: 4
+    max_steps: 12
+
+observation_space:
+  type: object
+  fields:
+    ticket:
+      type: object
+      description: Customer support ticket with subject, body, sender info, order_id, language
+    current_step:
+      type: integer
+    max_steps:
+      type: integer
+    task_id:
+      type: string
+    customer_state:
+      type: object
+      description: Dynamic customer anger and satisfaction levels
+    last_tool_result:
+      type: object
+      nullable: true
+    last_tool_error:
+      type: string
+      nullable: true
+    tools_called:
+      type: array
+      items:
+        type: string
+    done:
+      type: boolean
+
+action_space:
+  type: object
+  fields:
+    tool_name:
+      type: string
+      enum:
+        - classify_ticket
+        - lookup_order
+        - validate_eligibility
+        - issue_refund
+        - escalate_to_human
+        - send_reply
+    parameters:
+      type: object
+
+reward_space:
+  type: float
+  range: [0.0, 1.0]
+  description: >
+    Composite score from classification accuracy, tool ordering, resolution
+    correctness, NLP reply sentiment, trajectory efficiency, and customer anger.
+
+environment:
+  framework: openenv
+  runtime: python3.11
+  entrypoint: app:app
+  port: 7860
+
+huggingface:
+  space_sdk: docker
+  tags:
+    - openenv
+    - rl-environment
+    - customer-service
+    - multi-task
