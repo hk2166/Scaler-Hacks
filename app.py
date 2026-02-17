@@ -54,7 +54,9 @@ def health():
 
 
 @app.post("/reset")
-def reset(req: ResetRequest):
+def reset(req: Optional[ResetRequest] = None):
+    if req is None:
+        req = ResetRequest()
     if req.task_id not in _envs:
         raise HTTPException(400, f"Unknown task_id '{req.task_id}'. Use: easy, medium, hard")
     obs = _envs[req.task_id].reset()
