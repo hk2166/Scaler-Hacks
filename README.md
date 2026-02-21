@@ -1,3 +1,17 @@
+---
+title: Customer Service Agent OpenEnv
+emoji: 🎧
+colorFrom: indigo
+colorTo: purple
+sdk: docker
+app_port: 7860
+pinned: false
+tags:
+  - openenv
+  - rl-environment
+  - customer-service
+---
+
 #  Customer Service Agent — OpenEnv
 
 > **Scaler × Meta Hackathon Submission**
