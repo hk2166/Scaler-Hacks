@@ -2,9 +2,10 @@
 Baseline inference script — Scaler x Meta Hackathon
 ====================================================
 Reads credentials from environment variables:
-  API_BASE_URL   LLM endpoint
-  MODEL_NAME     Model identifier
-  HF_TOKEN       HuggingFace / API key
+  API_BASE_URL      LLM endpoint (required, has default)
+  MODEL_NAME        Model identifier (required, has default)
+  HF_TOKEN          HuggingFace API key (required, no default)
+  LOCAL_IMAGE_NAME  Docker image name for from_docker_image() (optional)
 """
 from __future__ import annotations
 import os, json, textwrap
@@ -12,9 +13,11 @@ from openai import OpenAI
 from environment.env import CustomerServiceEnv
 from environment.models import Action
 
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-API_KEY      = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY", "")
-MODEL_NAME   = os.getenv("MODEL_NAME", "meta-llama/Llama-3.3-70B-Instruct")
+# Environment variables — defaults only for API_BASE_URL and MODEL_NAME
+API_BASE_URL     = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME       = os.getenv("MODEL_NAME", "meta-llama/Llama-3.3-70B-Instruct")
+HF_TOKEN         = os.getenv("HF_TOKEN")          # no default — must be set
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")  # optional — used by from_docker_image()
 
 TASKS       = ["easy", "medium", "hard"]
 MAX_STEPS   = {"easy": 5, "medium": 8, "hard": 12}
@@ -136,8 +139,15 @@ def parse_action(text: str) -> Action:
 def run_task(client: OpenAI, task_id: str) -> float:
     env = CustomerServiceEnv(task_id)
     obs = env.reset()
-    print(f"\n  Ticket: {obs.ticket.subject[:60]}")
-    print(f"  Order:  {obs.ticket.order_id}  |  Lang: {obs.ticket.language}")
+
+    # START log — required structured format
+    print(json.dumps({
+        "event": "START",
+        "task_id": task_id,
+        "subject": obs.ticket.subject[:60],
+        "order_id": obs.ticket.order_id,
+        "language": obs.ticket.language,
+    }))
 
     final_score = 0.0
     for step in range(1, MAX_STEPS[task_id] + 1):
@@ -155,59 +165,61 @@ def run_task(client: OpenAI, task_id: str) -> float:
                 temperature=TEMPERATURE,
                 max_tokens=MAX_TOKENS,
             )
-            raw = completion.choices[0].message.content or ""   
-            if not raw:
-                print(f"  [Step {step}] LLM returned empty response")
+            raw = completion.choices[0].message.content or ""
         except Exception as e:
-            print(f"  [Step {step}] LLM error: {e}")
             raw = ""
+            # STEP log for LLM error
+            print(json.dumps({"event": "STEP", "task_id": task_id, "step": step,
+                              "error": str(e)}))
 
         action = parse_action(raw)
-        print(f"  [Step {step}] {action.tool_name}({json.dumps(action.parameters)[:80]})")
 
         obs, reward, done, _ = env.step(action)
-        if obs.last_tool_error:
-            print(f"           Tool error: {obs.last_tool_error[:90]}")
-        print(f"           Anger: {obs.customer_state.anger_level:.1f}")
+
+        # STEP log — required structured format
+        print(json.dumps({
+            "event": "STEP",
+            "task_id": task_id,
+            "step": step,
+            "tool": action.tool_name,
+            "params": action.parameters,
+            "tool_error": obs.last_tool_error,
+            "anger": round(obs.customer_state.anger_level, 2),
+            "done": done,
+        }))
 
         if done:
             final_score = reward.score
-            print(f"  Score: {final_score:.3f}  |  Breakdown: {reward.breakdown}")
             break
+
+    # END log — required structured format
+    print(json.dumps({
+        "event": "END",
+        "task_id": task_id,
+        "score": round(final_score, 4),
+        "breakdown": getattr(reward, "breakdown", {}),
+    }))
 
     return final_score
 
 
 def main():
-    # ── Fail fast with a clear message if credentials are missing ────────────
-    if not API_KEY:
+    # Fail fast with a clear message if HF_TOKEN is missing
+    if not HF_TOKEN:
         raise EnvironmentError(
-            "Missing API key. Set one of these environment variables:\n"
-            "  HF_TOKEN       (HuggingFace / preferred)\n"
-            "  OPENAI_API_KEY\n"
-            "  API_KEY"
+            "Missing HF_TOKEN environment variable. "
+            "Set it to your HuggingFace API key before running."
         )
 
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-    print("=" * 60)
-    print("Customer Service Agent — Baseline Inference")
-    print(f"Model: {MODEL_NAME}")
-    print("=" * 60)
+    # All LLM calls use the OpenAI client configured via API_BASE_URL, MODEL_NAME, HF_TOKEN
+    client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
 
     scores = {}
     for task_id in TASKS:
-        print(f"\n[Task: {task_id.upper()}]")
         scores[task_id] = run_task(client, task_id)
 
-    print("\n" + "=" * 60)
-    print("FINAL SCORES")
-    print("=" * 60)
-    for task_id, score in scores.items():
-        bar = "#" * int(score * 30)
-        print(f"  {task_id:8s}  {score:.3f}  [{bar:<30}]")
     avg = sum(scores.values()) / len(scores)
-    print(f"\n  Average:  {avg:.3f}")
-    print("=" * 60)
+    print(json.dumps({"event": "SUMMARY", "scores": scores, "average": round(avg, 4)}))
 
 
 if __name__ == "__main__":
