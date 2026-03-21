@@ -136,20 +136,16 @@ def parse_action(text: str) -> Action:
         return FALLBACK
 
 
-def run_task(client: OpenAI, task_id: str) -> float:
+def run_task(client: OpenAI, task_id: str) -> tuple[float, list[float]]:
     env = CustomerServiceEnv(task_id)
     obs = env.reset()
 
-    # START log — required structured format
-    print(json.dumps({
-        "event": "START",
-        "task_id": task_id,
-        "subject": obs.ticket.subject[:60],
-        "order_id": obs.ticket.order_id,
-        "language": obs.ticket.language,
-    }))
+    # [START] log — required structured format
+    print(f"[START] task={task_id} env=customer-service-agent-env model={MODEL_NAME}", flush=True)
 
+    rewards_list = []
     final_score = 0.0
+    
     for step in range(1, MAX_STEPS[task_id] + 1):
         if obs.done:
             break
@@ -168,39 +164,35 @@ def run_task(client: OpenAI, task_id: str) -> float:
             raw = completion.choices[0].message.content or ""
         except Exception as e:
             raw = ""
-            # STEP log for LLM error
-            print(json.dumps({"event": "STEP", "task_id": task_id, "step": step,
-                              "error": str(e)}))
-
-        action = parse_action(raw)
+            action = FALLBACK
+            error_msg = str(e)
+        else:
+            action = parse_action(raw)
+            error_msg = None
 
         obs, reward, done, _ = env.step(action)
+        
+        # Track rewards
+        rewards_list.append(reward.score)
+        
+        # Format action string
+        action_str = f"{action.tool_name}({json.dumps(action.parameters)})"
+        
+        # Get error from observation or from LLM call
+        error_display = obs.last_tool_error if obs.last_tool_error else (error_msg if error_msg else "null")
 
-        # STEP log — required structured format
-        print(json.dumps({
-            "event": "STEP",
-            "task_id": task_id,
-            "step": step,
-            "tool": action.tool_name,
-            "params": action.parameters,
-            "tool_error": obs.last_tool_error,
-            "anger": round(obs.customer_state.anger_level, 2),
-            "done": done,
-        }))
+        # [STEP] log — required structured format
+        print(f"[STEP] step={step} action={action_str} reward={reward.score:.2f} done={str(done).lower()} error={error_display}", flush=True)
 
         if done:
             final_score = reward.score
             break
 
-    # END log — required structured format
-    print(json.dumps({
-        "event": "END",
-        "task_id": task_id,
-        "score": round(final_score, 4),
-        "breakdown": getattr(reward, "breakdown", {}),
-    }))
+    # [END] log — required structured format
+    rewards_str = ",".join([f"{r:.2f}" for r in rewards_list])
+    print(f"[END] success={str(final_score > 0).lower()} steps={len(rewards_list)} score={final_score:.2f} rewards={rewards_str}", flush=True)
 
-    return final_score
+    return final_score, rewards_list
 
 
 def main():
@@ -216,10 +208,12 @@ def main():
 
     scores = {}
     for task_id in TASKS:
-        scores[task_id] = run_task(client, task_id)
+        score, _ = run_task(client, task_id)
+        scores[task_id] = score
 
     avg = sum(scores.values()) / len(scores)
-    print(json.dumps({"event": "SUMMARY", "scores": scores, "average": round(avg, 4)}))
+    # Summary is optional, not part of required format
+    print(f"\n# Summary: {scores}, average={avg:.4f}", flush=True)
 
 
 if __name__ == "__main__":
