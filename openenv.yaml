@@ -91,7 +91,7 @@ reward_space:
 environment:
   framework: openenv
   runtime: python3.11
-  entrypoint: server.app:main
+  entrypoint: app:main
   port: 7860
 
 huggingface:
