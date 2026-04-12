@@ -3,6 +3,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, Any, Optional
+from fastapi.responses import JSONResponse
 import uvicorn
 
 from environment.env import CustomerServiceEnv
@@ -31,6 +32,7 @@ _envs: Dict[str, CustomerServiceEnv] = {
 
 class ResetRequest(BaseModel):
     task_id: str = "easy"
+    seed: Optional[int] = None          # NEW — pass seed for reproducibility
 
 
 class StepRequest(BaseModel):
@@ -50,7 +52,28 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    """Validates that all 3 envs can reset and return a valid observation."""
+    results = {}
+    all_ok = True
+    for task_id, env in _envs.items():
+        try:
+            obs = env.reset(seed=0)          # use seed=0 for fast, reproducible check
+            assert obs.ticket is not None
+            assert obs.max_steps > 0
+            results[task_id] = "ok"
+        except Exception as e:
+            results[task_id] = f"ERROR: {e}"
+            all_ok = False
+
+    status_code = 200 if all_ok else 500
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": "ok" if all_ok else "degraded",
+            "tasks": results,
+            "version": "1.0.0",
+        }
+    )
 
 
 @app.post("/reset")
@@ -59,7 +82,7 @@ def reset(req: Optional[ResetRequest] = None):
         req = ResetRequest()
     if req.task_id not in _envs:
         raise HTTPException(400, f"Unknown task_id '{req.task_id}'. Use: easy, medium, hard")
-    obs = _envs[req.task_id].reset()
+    obs = _envs[req.task_id].reset(seed=req.seed)   # pass seed down
     return obs.dict()
 
 

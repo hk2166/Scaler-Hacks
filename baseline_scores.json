@@ -1,0 +1,10 @@
+{
+  "tasks": {
+    "easy": 0.952,
+    "medium": 0.858,
+    "hard": 0.381
+  },
+  "average": 0.7303,
+  "policy": "oracle",
+  "seed": 0
+}

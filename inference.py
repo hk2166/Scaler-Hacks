@@ -140,59 +140,68 @@ def run_task(client: OpenAI, task_id: str) -> tuple[float, list[float]]:
     env = CustomerServiceEnv(task_id)
     obs = env.reset()
 
-    # [START] log — required structured format
+    MAX_TOTAL_REWARD = 1.0          # each task's max score is 1.0
+    SUCCESS_THRESHOLD = 0.6         # agent "succeeded" if score >= 0.6
+
     print(f"[START] task={task_id} env=customer-service-agent-env model={MODEL_NAME}", flush=True)
 
-    rewards_list = []
-    final_score = 0.0
-    
+    rewards_list: list[float] = []
+    steps_taken = 0
+    last_reward = 0.0
+
     for step in range(1, MAX_STEPS[task_id] + 1):
         if obs.done:
             break
 
         prompt = build_prompt(obs.dict())
+        error_msg = None
+
         try:
             completion = client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user",   "content": prompt},
+                    {"role": "user", "content": prompt},
                 ],
                 temperature=TEMPERATURE,
                 max_tokens=MAX_TOKENS,
             )
             raw = completion.choices[0].message.content or ""
+            action = parse_action(raw)
         except Exception as e:
             raw = ""
             action = FALLBACK
             error_msg = str(e)
-        else:
-            action = parse_action(raw)
-            error_msg = None
 
         obs, reward, done, _ = env.step(action)
-        
-        # Track rewards
-        rewards_list.append(reward.score)
-        
-        # Format action string
-        action_str = f"{action.tool_name}({json.dumps(action.parameters)})"
-        
-        # Get error from observation or from LLM call
-        error_display = obs.last_tool_error if obs.last_tool_error else (error_msg if error_msg else "null")
+        last_reward = reward.score
+        rewards_list.append(last_reward)
+        steps_taken = step
 
-        # [STEP] log — required structured format
-        print(f"[STEP] step={step} action={action_str} reward={reward.score:.2f} done={str(done).lower()} error={error_display}", flush=True)
+        action_str = f"{action.tool_name}({json.dumps(action.parameters)})"
+        error_display = obs.last_tool_error or error_msg or "null"
+
+        print(
+            f"[STEP] step={step} action={action_str} "
+            f"reward={last_reward:.2f} done={str(done).lower()} error={error_display}",
+            flush=True,
+        )
 
         if done:
-            final_score = reward.score
             break
 
-    # [END] log — required structured format
-    rewards_str = ",".join([f"{r:.2f}" for r in rewards_list])
-    print(f"[END] success={str(final_score > 0).lower()} steps={len(rewards_list)} score={final_score:.2f} rewards={rewards_str}", flush=True)
+    # Score = sum of rewards / max possible (clamped to [0,1])
+    score = sum(rewards_list) / (MAX_TOTAL_REWARD * MAX_STEPS[task_id])
+    score = min(max(score, 0.0), 1.0)
+    success = score >= SUCCESS_THRESHOLD
 
-    return final_score, rewards_list
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards_list)
+    print(
+        f"[END] success={str(success).lower()} steps={steps_taken} "
+        f"score={score:.4f} rewards={rewards_str}",
+        flush=True,
+    )
+    return score, rewards_list
 
 
 def main():
